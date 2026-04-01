@@ -13,7 +13,6 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 SCRAPER_API_KEY = os.environ["SCRAPER_API_KEY"]
 SEEN_FILE = "seen_products.json"
 
-# Amazon Türkiye – Amazon Depo tüm kategoriler, en yeni ürünler önce
 TARGET_URLS = [
     "https://www.amazon.com.tr/s?i=warehouse-deals&srs=44219324031&s=date-desc-rank&fs=true",
     "https://www.amazon.com.tr/s?i=warehouse-deals&srs=44219324031&s=date-desc-rank&fs=true&page=2",
@@ -53,8 +52,58 @@ def send_telegram(message: str):
         print(f"[Telegram] Hata: {e}")
 
 
+def extract_name(item):
+    """Ürün adını birden fazla selector ile dene."""
+    selectors = [
+        "h2 a span",
+        "h2 span",
+        ".a-size-medium.a-color-base.a-text-normal",
+        ".a-size-base-plus.a-color-base.a-text-normal",
+        ".a-size-mini .a-color-base",
+        "[data-cy='title-recipe'] span",
+        ".s-title-instructions-style span",
+    ]
+    for sel in selectors:
+        tag = item.select_one(sel)
+        if tag:
+            text = tag.get_text(strip=True)
+            if text and len(text) > 3:
+                return text
+    return None
+
+
+def extract_price(item):
+    """Fiyatı birden fazla selector ile dene."""
+    selectors = [
+        ".a-price .a-offscreen",
+        ".a-price-whole",
+        ".a-color-price",
+        "[data-cy='price-recipe'] .a-offscreen",
+        ".s-price-instructions-style .a-offscreen",
+    ]
+    for sel in selectors:
+        tag = item.select_one(sel)
+        if tag:
+            text = tag.get_text(strip=True)
+            if text and ("TL" in text or "," in text or "." in text):
+                return text
+    return None
+
+
+def extract_link(item, asin):
+    """Ürün linkini çek."""
+    selectors = ["h2 a", "a.a-link-normal.s-no-outline", "a[href*='/dp/']"]
+    for sel in selectors:
+        tag = item.select_one(sel)
+        if tag and tag.get("href"):
+            href = tag["href"]
+            if href.startswith("http"):
+                return href
+            return "https://www.amazon.com.tr" + href
+    return f"https://www.amazon.com.tr/dp/{asin}"
+
+
 def scrape_page(target_url: str) -> list:
-    """ScraperAPI üzerinden Amazon sayfasını çek."""
     api_url = "https://api.scraperapi.com"
     params = {
         "api_key": SCRAPER_API_KEY,
@@ -74,6 +123,7 @@ def scrape_page(target_url: str) -> list:
 
     soup = BeautifulSoup(r.text, "html.parser")
     products = []
+    skipped = 0
 
     items = soup.select("div[data-asin]")
     print(f"[Scraper] {len(items)} öğe parse edildi.")
@@ -83,27 +133,23 @@ def scrape_page(target_url: str) -> list:
         if not asin:
             continue
 
-        name_tag = item.select_one("h2 a span")
-        name = name_tag.get_text(strip=True) if name_tag else "İsim bulunamadı"
+        name = extract_name(item)
+        price = extract_price(item)
+        link = extract_link(item, asin)
 
-        price_tag = item.select_one(".a-price .a-offscreen")
-        price = price_tag.get_text(strip=True) if price_tag else "Fiyat yok"
-
-        link_tag = item.select_one("h2 a")
-        link = (
-            "https://www.amazon.com.tr" + link_tag["href"]
-            if link_tag and link_tag.get("href")
-            else f"https://www.amazon.com.tr/dp/{asin}"
-        )
+        # İsim bulunamazsa bu ürünü atla (sponsor/reklam kartı olabilir)
+        if not name:
+            skipped += 1
+            continue
 
         products.append({
             "asin": asin,
             "name": name,
-            "price": price,
+            "price": price or "Fiyat yok",
             "link": link,
         })
 
-    print(f"[Scraper] {len(products)} geçerli ürün bulundu.")
+    print(f"[Scraper] {len(products)} geçerli, {skipped} atlandı.")
     return products
 
 
@@ -111,7 +157,7 @@ def format_message(product: dict) -> str:
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
     return (
         f"🏷️ <b>Yeni Amazon Depo Ürünü!</b>\n\n"
-        f"📦 <b>{product['name'][:100]}</b>\n"
+        f"📦 <b>{product['name'][:120]}</b>\n"
         f"💰 Fiyat: <b>{product['price']}</b>\n"
         f"🔗 <a href=\"{product['link']}\">Ürüne Git</a>\n\n"
         f"🕐 {now}"
@@ -135,10 +181,9 @@ def main():
         products = scrape_page(url)
         all_products.extend(products)
 
-    # Tekrar edenleri temizle
     unique = list({p["asin"]: p for p in all_products if p["asin"]}.values())
-
     new_products = [p for p in unique if p["asin"] not in seen]
+
     print(f"[Sistem] Toplam benzersiz ürün: {len(unique)}")
     print(f"[Sistem] Yeni ürün sayısı: {len(new_products)}")
 
