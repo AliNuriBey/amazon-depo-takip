@@ -3,7 +3,6 @@ from bs4 import BeautifulSoup
 import json
 import os
 import time
-import random
 from datetime import datetime
 
 # ─────────────────────────────────────────────
@@ -11,29 +10,14 @@ from datetime import datetime
 # ─────────────────────────────────────────────
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+SCRAPER_API_KEY = os.environ["SCRAPER_API_KEY"]
 SEEN_FILE = "seen_products.json"
 
-# Amazon Türkiye – Amazon Depo ana sayfası (tüm kategoriler, en yeni ürünler önce)
-URLS = [
+# Amazon Türkiye – Amazon Depo tüm kategoriler, en yeni ürünler önce
+TARGET_URLS = [
     "https://www.amazon.com.tr/s?i=warehouse-deals&srs=44219324031&s=date-desc-rank&fs=true",
     "https://www.amazon.com.tr/s?i=warehouse-deals&srs=44219324031&s=date-desc-rank&fs=true&page=2",
     "https://www.amazon.com.tr/s?i=warehouse-deals&srs=44219324031&s=date-desc-rank&fs=true&page=3",
-]
-
-HEADERS_LIST = [
-    {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-    },
-    {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
-        "Accept-Language": "tr-TR,tr;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Connection": "keep-alive",
-    },
 ]
 
 
@@ -69,12 +53,21 @@ def send_telegram(message: str):
         print(f"[Telegram] Hata: {e}")
 
 
-def scrape_page(url: str) -> list:
-    headers = random.choice(HEADERS_LIST)
+def scrape_page(target_url: str) -> list:
+    """ScraperAPI üzerinden Amazon sayfasını çek."""
+    api_url = "https://api.scraperapi.com"
+    params = {
+        "api_key": SCRAPER_API_KEY,
+        "url": target_url,
+        "country_code": "tr",
+        "render": "false",
+    }
+
     try:
-        time.sleep(random.uniform(2, 5))
-        r = requests.get(url, headers=headers, timeout=15)
+        time.sleep(2)
+        r = requests.get(api_url, params=params, timeout=60)
         r.raise_for_status()
+        print(f"[Scraper] HTTP {r.status_code} → {target_url[:60]}...")
     except Exception as e:
         print(f"[Scraper] Sayfa çekilemedi: {e}")
         return []
@@ -83,6 +76,8 @@ def scrape_page(url: str) -> list:
     products = []
 
     items = soup.select("div[data-asin]")
+    print(f"[Scraper] {len(items)} öğe parse edildi.")
+
     for item in items:
         asin = item.get("data-asin", "").strip()
         if not asin:
@@ -108,7 +103,7 @@ def scrape_page(url: str) -> list:
             "link": link,
         })
 
-    print(f"[Scraper] {len(products)} ürün bulundu → {url[:70]}...")
+    print(f"[Scraper] {len(products)} geçerli ürün bulundu.")
     return products
 
 
@@ -136,18 +131,19 @@ def main():
     print(f"[Sistem] Daha önce görülen ürün: {len(seen)}")
 
     all_products = []
-    for url in URLS:
+    for url in TARGET_URLS:
         products = scrape_page(url)
         all_products.extend(products)
 
     # Tekrar edenleri temizle
-    unique = {p["asin"]: p for p in all_products if p["asin"]}.values()
+    unique = list({p["asin"]: p for p in all_products if p["asin"]}.values())
 
     new_products = [p for p in unique if p["asin"] not in seen]
+    print(f"[Sistem] Toplam benzersiz ürün: {len(unique)}")
     print(f"[Sistem] Yeni ürün sayısı: {len(new_products)}")
 
     if not new_products:
-        print("[Sistem] Yeni ürün yok.")
+        print("[Sistem] Yeni ürün yok, bekleniyor...")
         return
 
     for product in new_products:
@@ -157,7 +153,7 @@ def main():
         time.sleep(1)
 
     save_seen(seen)
-    print(f"[Sistem] {len(new_products)} yeni ürün bildirildi.")
+    print(f"[Sistem] {len(new_products)} yeni ürün bildirildi ve kaydedildi.")
 
 
 if __name__ == "__main__":
