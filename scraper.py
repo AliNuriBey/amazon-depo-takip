@@ -13,10 +13,11 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 SEEN_FILE = "seen_products.json"
 
-# Amazon Türkiye – Elektronik kategorisi, Amazon Depo filtreli URL'ler
+# Amazon Türkiye – Amazon Depo ana sayfası (tüm kategoriler, en yeni ürünler önce)
 URLS = [
-    "https://www.amazon.com.tr/s?i=electronics&rh=p_85%3A1903430031&s=date-desc-rank&fs=true",
-    "https://www.amazon.com.tr/s?i=electronics&rh=p_85%3A1903430031&s=date-desc-rank&fs=true&page=2",
+    "https://www.amazon.com.tr/s?i=warehouse-deals&srs=44219324031&s=date-desc-rank&fs=true",
+    "https://www.amazon.com.tr/s?i=warehouse-deals&srs=44219324031&s=date-desc-rank&fs=true&page=2",
+    "https://www.amazon.com.tr/s?i=warehouse-deals&srs=44219324031&s=date-desc-rank&fs=true&page=3",
 ]
 
 HEADERS_LIST = [
@@ -41,7 +42,6 @@ HEADERS_LIST = [
 # ─────────────────────────────────────────────
 
 def load_seen():
-    """Daha önce görülen ürün ASIN'lerini yükle."""
     if os.path.exists(SEEN_FILE):
         with open(SEEN_FILE, "r", encoding="utf-8") as f:
             return set(json.load(f))
@@ -49,13 +49,11 @@ def load_seen():
 
 
 def save_seen(seen: set):
-    """Görülen ürün ASIN'lerini kaydet."""
     with open(SEEN_FILE, "w", encoding="utf-8") as f:
         json.dump(list(seen), f, ensure_ascii=False)
 
 
 def send_telegram(message: str):
-    """Telegram'a mesaj gönder."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -71,11 +69,10 @@ def send_telegram(message: str):
         print(f"[Telegram] Hata: {e}")
 
 
-def scrape_page(url: str) -> list[dict]:
-    """Verilen URL'deki Amazon Depo ürünlerini çek."""
+def scrape_page(url: str) -> list:
     headers = random.choice(HEADERS_LIST)
     try:
-        time.sleep(random.uniform(2, 5))  # Bot korumasını azaltmak için
+        time.sleep(random.uniform(2, 5))
         r = requests.get(url, headers=headers, timeout=15)
         r.raise_for_status()
     except Exception as e:
@@ -91,27 +88,18 @@ def scrape_page(url: str) -> list[dict]:
         if not asin:
             continue
 
-        # Ürün adı
         name_tag = item.select_one("h2 a span")
         name = name_tag.get_text(strip=True) if name_tag else "İsim bulunamadı"
 
-        # Fiyat
         price_tag = item.select_one(".a-price .a-offscreen")
         price = price_tag.get_text(strip=True) if price_tag else "Fiyat yok"
 
-        # URL
         link_tag = item.select_one("h2 a")
         link = (
             "https://www.amazon.com.tr" + link_tag["href"]
             if link_tag and link_tag.get("href")
             else f"https://www.amazon.com.tr/dp/{asin}"
         )
-
-        # Sadece Amazon Depo ürünlerini filtrele
-        badges = item.get_text().lower()
-        if "amazon depo" not in badges and "warehouse" not in badges:
-            # Yedek kontrol: URL'de warehouse filtresi zaten var, yine de işleyelim
-            pass  # URL zaten filtreliyor, tüm sonuçlar Amazon Depo
 
         products.append({
             "asin": asin,
@@ -120,12 +108,11 @@ def scrape_page(url: str) -> list[dict]:
             "link": link,
         })
 
-    print(f"[Scraper] {len(products)} ürün bulundu → {url[:60]}...")
+    print(f"[Scraper] {len(products)} ürün bulundu → {url[:70]}...")
     return products
 
 
 def format_message(product: dict) -> str:
-    """Telegram için mesaj formatla."""
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
     return (
         f"🏷️ <b>Yeni Amazon Depo Ürünü!</b>\n\n"
@@ -142,32 +129,35 @@ def format_message(product: dict) -> str:
 
 def main():
     print(f"\n{'='*50}")
-    print(f"Amazon Depo Takip Sistemi – {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+    print(f"Amazon Depo Takip – {datetime.now().strftime('%d.%m.%Y %H:%M')}")
     print(f"{'='*50}")
 
     seen = load_seen()
-    print(f"[Sistem] Daha önce görülen ürün sayısı: {len(seen)}")
+    print(f"[Sistem] Daha önce görülen ürün: {len(seen)}")
 
     all_products = []
     for url in URLS:
         products = scrape_page(url)
         all_products.extend(products)
 
-    new_products = [p for p in all_products if p["asin"] not in seen]
+    # Tekrar edenleri temizle
+    unique = {p["asin"]: p for p in all_products if p["asin"]}.values()
+
+    new_products = [p for p in unique if p["asin"] not in seen]
     print(f"[Sistem] Yeni ürün sayısı: {len(new_products)}")
 
     if not new_products:
-        print("[Sistem] Yeni ürün yok, bekleniyor...")
+        print("[Sistem] Yeni ürün yok.")
         return
 
     for product in new_products:
         msg = format_message(product)
         send_telegram(msg)
         seen.add(product["asin"])
-        time.sleep(1)  # Telegram rate limit
+        time.sleep(1)
 
     save_seen(seen)
-    print(f"[Sistem] {len(new_products)} yeni ürün bildirildi ve kaydedildi.")
+    print(f"[Sistem] {len(new_products)} yeni ürün bildirildi.")
 
 
 if __name__ == "__main__":
