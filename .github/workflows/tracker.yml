@@ -1,0 +1,53 @@
+name: Amazon Depo Takip
+
+on:
+  schedule:
+    # Her 30 dakikada bir çalışır (UTC saatiyle)
+    - cron: "*/30 * * * *"
+  workflow_dispatch:  # Manuel tetikleme butonu (test için)
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Repo'yu çek
+      - name: Repo'yu indir
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 2. Python kur
+      - name: Python 3.11 kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 3. Bağımlılıkları yükle
+      - name: Bağımlılıkları yükle
+        run: pip install requests beautifulsoup4 lxml
+
+      # 4. Önceki çalışmada kaydedilen ürün listesini indir (cache)
+      - name: Görülen ürünleri cache'den yükle
+        uses: actions/cache@v4
+        with:
+          path: seen_products.json
+          key: seen-products-${{ github.run_id }}
+          restore-keys: |
+            seen-products-
+
+      # 5. Scripti çalıştır
+      - name: Takip scriptini çalıştır
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python scraper.py
+
+      # 6. Güncellenmiş ürün listesini repo'ya commit et
+      - name: Ürün listesini kaydet
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add seen_products.json || true
+          git diff --cached --quiet || git commit -m "chore: ürün listesi güncellendi [skip ci]"
+          git push || true
