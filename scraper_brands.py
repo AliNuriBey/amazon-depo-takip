@@ -8,7 +8,13 @@ from datetime import datetime
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 SCRAPER_API_KEY = os.environ["SCRAPER_API_KEY"]
-SEEN_FILE = "seen_products.json"
+
+# seen_products.json yapısı:
+# {
+#   "active": {"ASIN": "label", ...},   ← şu an listede olanlar
+#   "inactive": {"ASIN": timestamp, ...} ← listeden düşenler (tekrar girerse bildir)
+# }
+STOCK_FILE = "seen_products.json"
 
 BRAND_URLS = {
     "🍎 Apple":       "https://www.amazon.com.tr/s?k=apple&i=warehouse-deals&srs=44219324031",
@@ -20,16 +26,20 @@ BRAND_URLS = {
 }
 
 
-def load_seen():
-    if os.path.exists(SEEN_FILE):
-        with open(SEEN_FILE, "r", encoding="utf-8") as f:
-            return set(json.load(f))
-    return set()
+def load_stock():
+    if os.path.exists(STOCK_FILE):
+        with open(STOCK_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            # Eski format uyumluluğu (düz set ise sıfırla)
+            if isinstance(data, list):
+                return {"active": {}, "inactive": {}}
+            return data
+    return {"active": {}, "inactive": {}}
 
 
-def save_seen(seen: set):
-    with open(SEEN_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(seen), f, ensure_ascii=False)
+def save_stock(stock: dict):
+    with open(STOCK_FILE, "w", encoding="utf-8") as f:
+        json.dump(stock, f, ensure_ascii=False, indent=2)
 
 
 def send_telegram(message: str):
@@ -109,10 +119,11 @@ def scrape_page(label: str, target_url: str) -> list:
     return products
 
 
-def format_message(product: dict) -> str:
+def format_message(product: dict, is_restock: bool = False) -> str:
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
+    status = "🔄 <b>Tekrar Stoğa Girdi!</b>" if is_restock else "🆕 <b>Yeni Amazon Depo Ürünü!</b>"
     return (
-        f"🏷️ <b>Yeni Amazon Depo Ürünü!</b>\n"
+        f"{status}\n"
         f"📂 <b>{product['label']}</b>\n\n"
         f"📦 {product['name'][:120]}\n\n"
         f"🔗 <a href=\"{product['link']}\">Ürüne Git → Fiyatı Gör</a>\n\n"
@@ -125,30 +136,57 @@ def main():
     print(f"Marka Takip – {datetime.now().strftime('%d.%m.%Y %H:%M')}")
     print(f"{'='*50}")
 
-    seen = load_seen()
-    print(f"[Sistem] Daha önce görülen ürün: {len(seen)}")
+    stock = load_stock()
+    previously_active = set(stock.get("active", {}).keys())
+    inactive = stock.get("inactive", {})
 
+    # Tüm sayfaları tara
     all_products = []
     for label, url in BRAND_URLS.items():
         products = scrape_page(label, url)
         all_products.extend(products)
 
-    unique = list({p["asin"]: p for p in all_products if p["asin"]}.values())
-    new_products = [p for p in unique if p["asin"] not in seen]
+    # Şu an listede olan benzersiz ürünler
+    current = {p["asin"]: p for p in all_products if p["asin"]}
+    current_asins = set(current.keys())
 
-    print(f"[Sistem] Yeni ürün: {len(new_products)}")
+    # Yeni stok: şu an var ama daha önce active'de yoktu
+    new_asins = current_asins - previously_active
+    # Tekrar stok: şu an var, daha önce inactive'deydi
+    restock_asins = current_asins & set(inactive.keys())
+    # Stoktan düşenler: daha önce active'deydi, şimdi yok
+    dropped_asins = previously_active - current_asins
 
-    if not new_products:
-        print("[Sistem] Yeni ürün yok.")
-        return
+    print(f"[Sistem] Aktif: {len(current_asins)} | Yeni: {len(new_asins)} | Tekrar: {len(restock_asins)} | Düşen: {len(dropped_asins)}")
 
-    for product in new_products:
-        send_telegram(format_message(product))
-        seen.add(product["asin"])
+    # Bildirimleri gönder
+    notified = 0
+    for asin in new_asins:
+        product = current[asin]
+        send_telegram(format_message(product, is_restock=False))
+        notified += 1
         time.sleep(1)
 
-    save_seen(seen)
-    print(f"[Sistem] {len(new_products)} ürün bildirildi.")
+    for asin in restock_asins:
+        product = current[asin]
+        send_telegram(format_message(product, is_restock=True))
+        # inactive'den çıkar
+        inactive.pop(asin, None)
+        notified += 1
+        time.sleep(1)
+
+    # Stoktan düşenleri inactive'e taşı
+    for asin in dropped_asins:
+        inactive[asin] = datetime.now().isoformat()
+
+    # Stoku kaydet
+    stock = {
+        "active": {asin: current[asin]["label"] for asin in current_asins},
+        "inactive": inactive,
+    }
+    save_stock(stock)
+
+    print(f"[Sistem] {notified} bildirim gönderildi.")
 
 
 if __name__ == "__main__":
