@@ -97,11 +97,6 @@ def extract_link(item, asin):
     return f"https://www.amazon.com.tr/dp/{asin}"
 
 
-def is_warehouse_product(item):
-    text = item.get_text().lower()
-    return "ikinci el" in text
-
-
 def scrape_page(label: str, target_url: str) -> list:
     params = {
         "api_key": SCRAPER_API_KEY,
@@ -126,15 +121,16 @@ def scrape_page(label: str, target_url: str) -> list:
         if not asin:
             continue
 
-        if not is_warehouse_product(item):
-            skipped += 1
-            continue
-
         name = extract_name(item)
         if not name:
             continue
 
         price = extract_price(item)
+
+        # Fiyat yoksa Amazon Depo ürünü değil, atla
+        if not price:
+            skipped += 1
+            continue
 
         products.append({
             "asin": asin,
@@ -144,19 +140,18 @@ def scrape_page(label: str, target_url: str) -> list:
             "label": f"🗂 {label}",
         })
 
-    print(f"[{label}] {len(products)} depo ürünü, {skipped} normal ürün atlandı.")
+    print(f"[{label}] {len(products)} depo ürünü, {skipped} fiyatsız atlandı.")
     return products
 
 
 def format_message(product: dict, is_restock: bool = False) -> str:
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
     status = "🔄 <b>Tekrar Stoğa Girdi!</b>" if is_restock else "🆕 <b>Yeni Amazon Depo Ürünü!</b>"
-    price_line = f"💰 <b>{product['price']}</b>\n\n" if product.get("price") else ""
     return (
         f"{status}\n"
         f"📂 <b>{product['label']}</b>\n\n"
         f"📦 {product['name'][:120]}\n\n"
-        f"{price_line}"
+        f"💰 <b>{product['price']}</b>\n\n"
         f"🔗 <a href=\"{product['link']}\">Ürüne Git</a>\n\n"
         f"🕐 {now}"
     )
