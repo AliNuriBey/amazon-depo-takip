@@ -108,20 +108,24 @@ def scrape_page(label: str, target_url: str) -> list:
 
     soup = BeautifulSoup(r.text, "html.parser")
     products = []
+    skipped = 0
 
-    all_items = [i for i in soup.select("div[data-asin]") if i.get("data-asin")]
-
-    # DEBUG: İlk ürünün ham metnini yazdır
-    if all_items:
-        sample = all_items[0].get_text(" ", strip=True)[:400]
-        print(f"[DEBUG {label}] İlk ürün metni: {repr(sample)}")
-
-    for item in all_items:
+    for item in soup.select("div[data-asin]"):
         asin = item.get("data-asin", "").strip()
+        if not asin:
+            continue
+
         name = extract_name(item)
         if not name:
             continue
+
         price = extract_price(item)
+
+        # Fiyat yoksa Amazon Depo ürünü değil, atla
+        if not price:
+            skipped += 1
+            continue
+
         products.append({
             "asin": asin,
             "name": name,
@@ -130,19 +134,18 @@ def scrape_page(label: str, target_url: str) -> list:
             "label": label,
         })
 
-    print(f"[{label}] {len(products)} ürün bulundu.")
+    print(f"[{label}] {len(products)} depo ürünü, {skipped} fiyatsız atlandı.")
     return products
 
 
 def format_message(product: dict, is_restock: bool = False) -> str:
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
     status = "🔄 <b>Tekrar Stoğa Girdi!</b>" if is_restock else "🆕 <b>Yeni Amazon Depo Ürünü!</b>"
-    price_line = f"💰 <b>{product['price']}</b>\n\n" if product.get("price") else ""
     return (
         f"{status}\n"
         f"📂 <b>{product['label']}</b>\n\n"
         f"📦 {product['name'][:120]}\n\n"
-        f"{price_line}"
+        f"💰 <b>{product['price']}</b>\n\n"
         f"🔗 <a href=\"{product['link']}\">Ürüne Git</a>\n\n"
         f"🕐 {now}"
     )
