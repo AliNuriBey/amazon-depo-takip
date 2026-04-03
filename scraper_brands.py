@@ -9,12 +9,8 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 SCRAPER_API_KEY = os.environ["SCRAPER_API_KEY"]
 
-# seen_products.json yapısı:
-# {
-#   "active": {"ASIN": "label", ...},   ← şu an listede olanlar
-#   "inactive": {"ASIN": timestamp, ...} ← listeden düşenler (tekrar girerse bildir)
-# }
-STOCK_FILE = "seen_products.json"
+# Markalar için ayrı dosya
+STOCK_FILE = "stock_brands.json"
 
 BRAND_URLS = {
     "🍎 Apple":       "https://www.amazon.com.tr/s?k=apple&i=warehouse-deals&srs=44219324031",
@@ -29,11 +25,12 @@ BRAND_URLS = {
 def load_stock():
     if os.path.exists(STOCK_FILE):
         with open(STOCK_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            # Eski format uyumluluğu (düz set ise sıfırla)
-            if isinstance(data, list):
-                return {"active": {}, "inactive": {}}
-            return data
+            try:
+                data = json.load(f)
+                if isinstance(data, dict) and "active" in data:
+                    return data
+            except:
+                pass
     return {"active": {}, "inactive": {}}
 
 
@@ -137,54 +134,43 @@ def main():
     print(f"{'='*50}")
 
     stock = load_stock()
-    previously_active = set(stock.get("active", {}).keys())
-    inactive = stock.get("inactive", {})
+    previously_active = set(stock["active"].keys())
+    inactive = stock["inactive"]
+    print(f"[Sistem] Önceki aktif: {len(previously_active)} | İnaktif: {len(inactive)}")
 
-    # Tüm sayfaları tara
     all_products = []
     for label, url in BRAND_URLS.items():
         products = scrape_page(label, url)
         all_products.extend(products)
 
-    # Şu an listede olan benzersiz ürünler
     current = {p["asin"]: p for p in all_products if p["asin"]}
     current_asins = set(current.keys())
 
-    # Yeni stok: şu an var ama daha önce active'de yoktu
-    new_asins = current_asins - previously_active
-    # Tekrar stok: şu an var, daha önce inactive'deydi
+    new_asins = current_asins - previously_active - set(inactive.keys())
     restock_asins = current_asins & set(inactive.keys())
-    # Stoktan düşenler: daha önce active'deydi, şimdi yok
     dropped_asins = previously_active - current_asins
 
-    print(f"[Sistem] Aktif: {len(current_asins)} | Yeni: {len(new_asins)} | Tekrar: {len(restock_asins)} | Düşen: {len(dropped_asins)}")
+    print(f"[Sistem] Yeni: {len(new_asins)} | Tekrar: {len(restock_asins)} | Düşen: {len(dropped_asins)}")
 
-    # Bildirimleri gönder
     notified = 0
     for asin in new_asins:
-        product = current[asin]
-        send_telegram(format_message(product, is_restock=False))
+        send_telegram(format_message(current[asin], is_restock=False))
         notified += 1
         time.sleep(1)
 
     for asin in restock_asins:
-        product = current[asin]
-        send_telegram(format_message(product, is_restock=True))
-        # inactive'den çıkar
+        send_telegram(format_message(current[asin], is_restock=True))
         inactive.pop(asin, None)
         notified += 1
         time.sleep(1)
 
-    # Stoktan düşenleri inactive'e taşı
     for asin in dropped_asins:
         inactive[asin] = datetime.now().isoformat()
 
-    # Stoku kaydet
-    stock = {
+    save_stock({
         "active": {asin: current[asin]["label"] for asin in current_asins},
         "inactive": inactive,
-    }
-    save_stock(stock)
+    })
 
     print(f"[Sistem] {notified} bildirim gönderildi.")
 
