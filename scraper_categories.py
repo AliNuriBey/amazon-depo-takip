@@ -8,7 +8,9 @@ from datetime import datetime
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 SCRAPER_API_KEY = os.environ["SCRAPER_API_KEY"]
-STOCK_FILE = "seen_products.json"
+
+# Kategoriler için ayrı dosya
+STOCK_FILE = "stock_categories.json"
 
 BASE = "https://www.amazon.com.tr/s?srs=44219324031&bbn=44219324031&s=date-desc-rank&fs=true"
 CATEGORIES = {
@@ -29,10 +31,12 @@ CATEGORIES = {
 def load_stock():
     if os.path.exists(STOCK_FILE):
         with open(STOCK_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            if isinstance(data, list):
-                return {"active": {}, "inactive": {}}
-            return data
+            try:
+                data = json.load(f)
+                if isinstance(data, dict) and "active" in data:
+                    return data
+            except:
+                pass
     return {"active": {}, "inactive": {}}
 
 
@@ -136,8 +140,9 @@ def main():
     print(f"{'='*50}")
 
     stock = load_stock()
-    previously_active = set(stock.get("active", {}).keys())
-    inactive = stock.get("inactive", {})
+    previously_active = set(stock["active"].keys())
+    inactive = stock["inactive"]
+    print(f"[Sistem] Önceki aktif: {len(previously_active)} | İnaktif: {len(inactive)}")
 
     all_products = []
     for category, node in CATEGORIES.items():
@@ -151,11 +156,11 @@ def main():
     current = {p["asin"]: p for p in all_products if p["asin"]}
     current_asins = set(current.keys())
 
-    new_asins = current_asins - previously_active
+    new_asins = current_asins - previously_active - set(inactive.keys())
     restock_asins = current_asins & set(inactive.keys())
     dropped_asins = previously_active - current_asins
 
-    print(f"[Sistem] Aktif: {len(current_asins)} | Yeni: {len(new_asins)} | Tekrar: {len(restock_asins)} | Düşen: {len(dropped_asins)}")
+    print(f"[Sistem] Yeni: {len(new_asins)} | Tekrar: {len(restock_asins)} | Düşen: {len(dropped_asins)}")
 
     notified = 0
     for asin in new_asins:
@@ -172,11 +177,10 @@ def main():
     for asin in dropped_asins:
         inactive[asin] = datetime.now().isoformat()
 
-    stock = {
+    save_stock({
         "active": {asin: current[asin]["label"] for asin in current_asins},
         "inactive": inactive,
-    }
-    save_stock(stock)
+    })
 
     print(f"[Sistem] {notified} bildirim gönderildi.")
 
