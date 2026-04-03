@@ -2,6 +2,7 @@ import requests
 from bs4 import BeautifulSoup
 import json
 import os
+import re
 import time
 from datetime import datetime
 
@@ -71,23 +72,13 @@ def extract_name(item):
 
 
 def extract_price(item):
-    """
-    "Diğer satın alma seçenekleri: 1.234,56 TL (1 İkinci El Ürün)" 
-    satırından fiyatı çek.
-    """
     full_text = item.get_text(" ", strip=True)
-    
-    # "seçenekleri" kelimesinden sonraki fiyatı bul
-    import re
     match = re.search(r'seçenekleri[:\s]+([\d.,]+\s*TL)', full_text)
     if match:
         return match.group(1).strip()
-    
-    # Alternatif: direkt TL pattern ara
     matches = re.findall(r'([\d]{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})\s*TL)', full_text)
     if matches:
         return matches[0].strip()
-    
     return None
 
 
@@ -98,12 +89,6 @@ def extract_link(item, asin):
             href = tag["href"]
             return href if href.startswith("http") else "https://www.amazon.com.tr" + href
     return f"https://www.amazon.com.tr/dp/{asin}"
-
-
-def is_warehouse_product(item):
-    """Sadece 'ikinci el' geçen kartları Amazon Depo ürünü say."""
-    text = item.get_text().lower()
-    return "ikinci el" in text
 
 
 def scrape_page(label: str, target_url: str) -> list:
@@ -123,24 +108,20 @@ def scrape_page(label: str, target_url: str) -> list:
 
     soup = BeautifulSoup(r.text, "html.parser")
     products = []
-    skipped = 0
 
-    for item in soup.select("div[data-asin]"):
+    all_items = [i for i in soup.select("div[data-asin]") if i.get("data-asin")]
+
+    # DEBUG: İlk ürünün ham metnini yazdır
+    if all_items:
+        sample = all_items[0].get_text(" ", strip=True)[:400]
+        print(f"[DEBUG {label}] İlk ürün metni: {repr(sample)}")
+
+    for item in all_items:
         asin = item.get("data-asin", "").strip()
-        if not asin:
-            continue
-
-        # Sadece Amazon Depo (ikinci el) ürünleri al
-        if not is_warehouse_product(item):
-            skipped += 1
-            continue
-
         name = extract_name(item)
         if not name:
             continue
-
         price = extract_price(item)
-
         products.append({
             "asin": asin,
             "name": name,
@@ -149,7 +130,7 @@ def scrape_page(label: str, target_url: str) -> list:
             "label": label,
         })
 
-    print(f"[{label}] {len(products)} depo ürünü, {skipped} normal ürün atlandı.")
+    print(f"[{label}] {len(products)} ürün bulundu.")
     return products
 
 
