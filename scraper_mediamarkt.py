@@ -60,7 +60,7 @@ def parse_price(txt):
 
 def scrape_category(page, cat_name, url):
     try:
-        page.goto(url, timeout=30000)
+        page.goto(url, timeout=60000, wait_until="domcontentloaded")
         page.wait_for_timeout(4000)
         for _ in range(10):
             page.evaluate('window.scrollBy(0, 1000)')
