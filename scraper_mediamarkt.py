@@ -139,7 +139,7 @@ def scrape_page(page, cat_name, url):
 
 def scrape_category(page, cat_name, url):
     # marketplace=MediaMarkt filtresi ekle
-    base_url = url + ("&" if "?" in url else "?") + "marketplace=MediaMarkt"
+    base_url = url + ("&" if "?" in url else "?") + "marketplace=MediaMarkt&sort=currentprice+asc"
     all_results = []
     for page_num in range(1, MAX_PAGES + 1):
         page_url = base_url if page_num == 1 else f"{base_url}&page={page_num}"
