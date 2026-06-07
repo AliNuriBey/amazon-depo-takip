@@ -11,6 +11,7 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 STOCK_FILE = "/opt/scraper/stock_mediamarkt.json"
 THRESHOLD = 30.0
 CHROMIUM = '/root/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome'
+MAX_PAGES = 200
 
 CATEGORIES = {
     "📱 Telefon":            "https://www.mediamarkt.com.tr/tr/category/telefon-465595.html",
@@ -50,53 +51,59 @@ def send_telegram(msg):
     except Exception as e:
         print(f"[Telegram] Hata: {e}")
 
-def parse_price(txt):
-    txt = re.sub(r'[^\d,.]', '', txt.split('\n')[0])
-    txt = txt.replace('.', '').replace(',', '.')
-    try:
-        return float(txt)
-    except:
-        return None
+def parse_price(html):
+    # ₺ işaretli fiyatı bul: ₺5.249,–
+    matches = re.findall(r'₺([\d.]+),', html)
+    if matches:
+        try:
+            return float(matches[0].replace('.', ''))
+        except:
+            pass
+    return None
 
-def scrape_category(page, cat_name, url):
+def scrape_page(page, cat_name, url):
     try:
         page.goto(url, timeout=60000, wait_until="domcontentloaded")
-        page.wait_for_timeout(4000)
-        for _ in range(10):
+        page.wait_for_timeout(3000)
+        for _ in range(8):
             page.evaluate('window.scrollBy(0, 1000)')
-            page.wait_for_timeout(800)
+            page.wait_for_timeout(400)
     except Exception as e:
         print(f"[{cat_name}] Hata: {e}")
-        return []
+        return [], False
 
     price_els = page.query_selector_all('[data-test="cofr-price product-price"]')
     name_els = page.query_selector_all('a[data-test="mms-router-link-product-list-item-link"]')
 
-    print(f"[{cat_name}] Fiyat: {len(price_els)} | Ad: {len(name_els)}")
+    if not price_els:
+        return [], False
 
     results = []
     for p_el, n_el in zip(price_els, name_els):
         try:
-            price_txt = p_el.inner_text().split('\n')[0].strip()
-            price = parse_price(price_txt)
-            if not price:
-                continue
-
             name = n_el.inner_text().strip()
             href = n_el.get_attribute('href')
             link = "https://www.mediamarkt.com.tr" + href if href else ""
 
             html = p_el.evaluate('el => el.parentElement?.parentElement?.parentElement?.parentElement?.innerHTML || ""')
+            
+            # Fiyatı ₺ işaretinden parse et
+            price = parse_price(html)
+            if not price:
+                continue
+
             basket_raw = re.findall(r'>-(\d+(?:\.\d{3})*),</span>', html)
-            discount_raw = re.findall(r'>-(%\d+[,.]\d+)<', html)
+            discount_raw = re.findall(r'>-([\d]+[,.]\d+)%<|>-%\s*([\d]+[,.]\d+)<', html)
 
             basket = None
             if basket_raw:
                 basket = float(basket_raw[0].replace('.', '').replace(',', '.'))
 
+            # İndirim yüzdesi badge'i: -%48,84
             discount_pct = None
-            if discount_raw:
-                d = discount_raw[0].replace('%', '').replace(',', '.')
+            disc_matches = re.findall(r'>-(%[\d]+[,.][\d]+)<', html)
+            if disc_matches:
+                d = disc_matches[0].replace('%', '').replace(',', '.')
                 try:
                     discount_pct = float(d)
                 except:
@@ -128,7 +135,23 @@ def scrape_category(page, cat_name, url):
         except Exception as e:
             continue
 
-    return results
+    return results, len(price_els) > 0
+
+def scrape_category(page, cat_name, url):
+    # marketplace=MediaMarkt filtresi ekle
+    base_url = url + ("&" if "?" in url else "?") + "marketplace=MediaMarkt"
+    all_results = []
+    for page_num in range(1, MAX_PAGES + 1):
+        page_url = base_url if page_num == 1 else f"{base_url}&page={page_num}"
+        results, has_products = scrape_page(page, cat_name, page_url)
+        if has_products:
+            print(f"[{cat_name}] Sayfa {page_num}: {len(results)} uygun")
+        all_results.extend(results)
+        if not has_products:
+            print(f"[{cat_name}] Sayfa {page_num}: boş, duruyorum. Toplam: {len(all_results)}")
+            break
+        time.sleep(random.uniform(1, 2))
+    return all_results
 
 def format_msg(p):
     now = datetime.now().strftime("%d.%m.%Y %H:%M")
@@ -164,9 +187,9 @@ def main():
         page = browser.new_page()
         for cat_name, url in CATEGORIES.items():
             results = scrape_category(page, cat_name, url)
-            print(f"[{cat_name}] {len(results)} uygun ürün")
+            print(f"[{cat_name}] Toplam uygun: {len(results)}")
             all_results.extend(results)
-            time.sleep(random.uniform(1, 2))
+            time.sleep(random.uniform(2, 4))
         browser.close()
 
     print(f"\n[Sistem] Toplam uygun: {len(all_results)}")
