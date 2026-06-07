@@ -62,9 +62,9 @@ def scrape_category(page, cat_name, url):
     try:
         page.goto(url, timeout=30000)
         page.wait_for_timeout(4000)
-        for _ in range(3):
-            page.keyboard.press('End')
-            page.wait_for_timeout(1500)
+        for _ in range(10):
+            page.evaluate('window.scrollBy(0, 1000)')
+            page.wait_for_timeout(800)
     except Exception as e:
         print(f"[{cat_name}] Hata: {e}")
         return []
