@@ -11,7 +11,7 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 STOCK_FILE = "/opt/scraper/stock_mediamarkt.json"
 THRESHOLD = 30.0
 CHROMIUM = '/root/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome'
-MAX_PAGES = 200
+MAX_PAGES = 30
 
 CATEGORIES = {
     "📱 Telefon":            "https://www.mediamarkt.com.tr/tr/category/telefon-465595.html",
