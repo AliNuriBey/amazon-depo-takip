@@ -71,11 +71,14 @@ def scrape_page(page, page_num, url):
         page.goto(url, timeout=60000, wait_until="domcontentloaded")
         page.wait_for_timeout(3000)
         for _ in range(8):
-            page.evaluate('window.scrollBy(0, 1000)')
-            page.wait_for_timeout(400)
+            try:
+                page.evaluate('window.scrollBy(0, 1000)')
+                page.wait_for_timeout(400)
+            except:
+                pass
     except Exception as e:
-        print(f"Sayfa {page_num} hata: {e}")
-        return [], False
+        print(f"Sayfa {page_num} timeout/hata: {e.__class__.__name__}, atlıyorum.")
+        return [], True  # Hata olsa da devam et
 
     price_els = page.query_selector_all('[data-test="cofr-price product-price"]')
     name_els = page.query_selector_all('a[data-test="mms-router-link-product-list-item-link"]')
@@ -146,12 +149,20 @@ def main():
         )
         page = browser.new_page()
 
+        consecutive_errors = 0
         while True:
             url = CAT_URL if page_num == 1 else f"{CAT_URL}&page={page_num}"
             results, has_products = scrape_page(page, page_num, url)
+            if not has_products and len(results) == 0:
+                consecutive_errors += 1
+                if consecutive_errors >= 3:
+                    print(f"Sayfa {page_num}: 3 ardışık boş sayfa, duruyorum.")
+                    break
+            else:
+                consecutive_errors = 0
             print(f"Sayfa {page_num}: {len(results)} uygun")
             all_results.extend(results)
-            if not has_products:
+            if not has_products and consecutive_errors == 0:
                 print(f"Sayfa {page_num}: boş, duruyorum.")
                 break
             page_num += 1
