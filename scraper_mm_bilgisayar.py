@@ -129,8 +129,18 @@ def main():
         page = browser.new_page()
         
         print(f"Sayfa yükleniyor...")
-        page.goto(CAT_URL, timeout=60000, wait_until="domcontentloaded")
-        page.wait_for_timeout(3000)
+        for attempt in range(3):
+            try:
+                page.goto(CAT_URL, timeout=30000, wait_until="domcontentloaded")
+                page.wait_for_timeout(3000)
+                break
+            except Exception as e:
+                print(f"Yükleme denemesi {attempt+1} başarısız: {e.__class__.__name__}")
+                if attempt == 2:
+                    print("3 deneme başarısız, çıkıyorum.")
+                    browser.close()
+                    return
+                page.wait_for_timeout(5000)
         
         while True:
             # Scroll et
