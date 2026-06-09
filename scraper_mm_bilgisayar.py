@@ -66,41 +66,22 @@ def format_msg(p):
     lines += [f"", f"🔗 <a href=\"{p['link']}\">Ürüne Git</a>", f"🕐 {now}"]
     return "\n".join(lines)
 
-def scrape_page(page, page_num, url):
-    try:
-        page.goto(url, timeout=60000, wait_until="domcontentloaded")
-        page.wait_for_timeout(3000)
-        for _ in range(8):
-            try:
-                page.evaluate('window.scrollBy(0, 1000)')
-                page.wait_for_timeout(400)
-            except:
-                pass
-    except Exception as e:
-        print(f"Sayfa {page_num} timeout/hata: {e.__class__.__name__}, atlıyorum.")
-        return [], True  # Hata olsa da devam et
-
+def extract_products(page):
     price_els = page.query_selector_all('[data-test="cofr-price product-price"]')
     name_els = page.query_selector_all('a[data-test="mms-router-link-product-list-item-link"]')
-
-    if not price_els:
-        return [], False
-
+    
     results = []
     for p_el, n_el in zip(price_els, name_els):
         try:
             name = n_el.inner_text().strip()
             href = n_el.get_attribute('href')
             link = "https://www.mediamarkt.com.tr" + href if href else ""
-
             html = p_el.evaluate('el => el.parentElement?.parentElement?.parentElement?.parentElement?.innerHTML || ""')
             price = parse_price(html)
             if not price:
                 continue
-
             basket_raw = re.findall(r'>-(\d+(?:\.\d{3})*),</span>', html)
             disc_raw = re.findall(r'>-(%[\d]+[,.][\d]+)<', html)
-
             basket = float(basket_raw[0].replace('.', '').replace(',', '.')) if basket_raw else None
             discount_pct = None
             if disc_raw:
@@ -108,7 +89,6 @@ def scrape_page(page, page_num, url):
                     discount_pct = float(disc_raw[0].replace('%', '').replace(',', '.'))
                 except:
                     pass
-
             qualifies = False
             reasons = []
             if discount_pct and discount_pct >= THRESHOLD:
@@ -117,7 +97,6 @@ def scrape_page(page, page_num, url):
             if basket and price > 0 and (basket / price * 100) >= THRESHOLD:
                 qualifies = True
                 reasons.append(f"sepette %{basket/price*100:.1f}")
-
             if qualifies:
                 results.append({
                     "name": name,
@@ -130,8 +109,7 @@ def scrape_page(page, page_num, url):
                 })
         except:
             continue
-
-    return results, True
+    return results, len(price_els)
 
 def main():
     print(f"\n{'='*50}\n{CAT_NAME} – {datetime.now().strftime('%d.%m.%Y %H:%M')}\n{'='*50}")
@@ -139,7 +117,8 @@ def main():
     print(f"[Sistem] Kayıtlı: {len(stock)}")
 
     all_results = []
-    page_num = 1
+    seen_links = set()
+    click_count = 0
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(
@@ -148,26 +127,44 @@ def main():
             args=['--no-sandbox', '--disable-setuid-sandbox']
         )
         page = browser.new_page()
-
-        consecutive_errors = 0
+        
+        print(f"Sayfa yükleniyor...")
+        page.goto(CAT_URL, timeout=60000, wait_until="domcontentloaded")
+        page.wait_for_timeout(3000)
+        
         while True:
-            url = CAT_URL if page_num == 1 else f"{CAT_URL}&page={page_num}"
-            results, has_products = scrape_page(page, page_num, url)
-            if not has_products and len(results) == 0:
-                consecutive_errors += 1
-                if consecutive_errors >= 3:
-                    print(f"Sayfa {page_num}: 3 ardışık boş sayfa, duruyorum.")
-                    break
-            else:
-                consecutive_errors = 0
-            print(f"Sayfa {page_num}: {len(results)} uygun")
-            all_results.extend(results)
-            if not has_products and consecutive_errors == 0:
-                print(f"Sayfa {page_num}: boş, duruyorum.")
+            # Scroll et
+            for _ in range(5):
+                page.evaluate('window.scrollBy(0, 800)')
+                page.wait_for_timeout(300)
+            
+            # Mevcut ürünleri çek
+            results, total = extract_products(page)
+            
+            # Yeni ürünleri filtrele
+            new_results = [r for r in results if r["link"] not in seen_links]
+            for r in results:
+                seen_links.add(r["link"])
+            
+            if new_results:
+                all_results.extend(new_results)
+                print(f"[Tıklama {click_count}] Toplam ürün: {total} | Yeni uygun: {len(new_results)} | Toplam uygun: {len(all_results)}")
+            
+            # "Daha fazla göster" butonunu bul ve tıkla
+            btn = page.query_selector('[data-test="mms-search-srp-loadmore"]')
+            if not btn:
+                print(f"Daha fazla buton yok, duruyorum. Toplam: {len(all_results)} uygun ürün")
                 break
-            page_num += 1
-            time.sleep(random.uniform(1, 2))
-
+            
+            try:
+                btn.scroll_into_view_if_needed()
+                btn.click()
+                click_count += 1
+                page.wait_for_timeout(2000)
+            except Exception as e:
+                print(f"Buton tıklama hatası: {e}")
+                break
+        
         browser.close()
 
     print(f"\n[Sistem] Toplam uygun: {len(all_results)}")
